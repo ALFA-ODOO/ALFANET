@@ -16,9 +16,9 @@ def exportar_correos(archivo_salida: str) -> None:
     """
 
     consulta = (
-        "SELECT nombre, email "
-        "FROM BT "
-        "WHERE email IS NOT NULL AND email <> ''"
+        "SELECT RAZON_SOCIAL, MAIL "
+        "FROM VT_CLIENTES "
+        "WHERE MAIL IS NOT NULL AND MAIL <> ''"
     )
 
     conexion = pyodbc.connect(
