@@ -49,13 +49,21 @@ TECHNICIAN_USER_MAP: Dict[str, int] = {
     # TODO: reemplazar por los mapeos reales, por ejemplo:
     # "10": 25,
     # "12": 37,
-   1:2,
-   4:10,
-   6:9, 
-   9:7,
-   10:11,
-   15:6,
-   1000:8
+    "1": 2,
+    "4": 10,
+    "6": 9,
+    "9": 7,
+    "10": 11,
+    "15": 6,
+    "1000": 8,
+}
+
+# Normalizar las claves a cadenas sin espacios para aceptar valores numéricos
+# provenientes de SQL Server (por ejemplo ``'   10'``).
+TECHNICIAN_USER_MAP = {
+    str(key).strip(): value
+    for key, value in TECHNICIAN_USER_MAP.items()
+    if key is not None and str(key).strip()
 }
 
 # ----------------------------------------------------------------------------
@@ -208,7 +216,13 @@ def normalize_datetime(value: object) -> Optional[dt.datetime]:
         value = value.strip()
         if not value:
             return None
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%d/%m/%Y %H:%M",
+            "%d/%m/%Y",
+        ):
             try:
                 parsed = dt.datetime.strptime(value, fmt)
                 if fmt in ("%Y-%m-%d", "%d/%m/%Y"):
