@@ -168,12 +168,19 @@ def get_timesheet_ticket_field(
 
 
 def fetch_diarios(
-    cursor: pyodbc.Cursor, limit: Optional[int] = None
+    cursor: pyodbc.Cursor,
+    limit: Optional[int] = None,
+    target_date: Optional[dt.date] = None,
 ) -> List[Dict[str, object]]:
-    """Leer la vista ``V_MV_Diarios`` y devolver los registros como diccionarios."""
+    """Leer la vista ``V_MV_Diarios`` filtrando por la fecha indicada."""
 
-    query = "SELECT * FROM V_MV_Diarios"
-    cursor.execute(query)
+    if target_date is None:
+        target_date = dt.date.today()
+
+    logger.info("Filtrando diarios por fecha: %s", target_date.isoformat())
+
+    query = "SELECT * FROM V_MV_Diarios WHERE CAST(FECHAINICIO AS DATE) = ?"
+    cursor.execute(query, target_date)
     rows = cursor.fetchmany(limit) if limit else cursor.fetchall()
     columns = [column[0] for column in cursor.description]
     data = [dict(zip(columns, row)) for row in rows]
