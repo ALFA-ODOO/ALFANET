@@ -1,8 +1,7 @@
 # --- Config (igual que tenías) ---
 $root    = "C:\NETSISTEMAS\ODOO_PROYECT\ALFANET"
 $script  = Join-Path $root "wa_sesiones_a_timesheets.py"
-$exportScript = Join-Path $root "exportar_whatsapp_odoo.py"
-$venvAct = Join-Path $root "venv\Scripts\Activate.ps1"
+$exportScript = Join-Path $root "importar_diarios_helpdesk.py"
 $logsDir = Join-Path $root "logs"
 $prevDir = Join-Path $root "previews"
 $proyectoNombre = "Soporte WhatsApp"
