@@ -270,6 +270,17 @@ def to_float(value: object) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
+# util pequeño (sumalo arriba, junto a helpers)
+def get_any(row, *names):
+    for n in names:
+        if n in row:
+            return row[n]
+    # fallback case-insensitive
+    low = {k.lower(): v for k, v in row.items()}
+    for n in names:
+        if n.lower() in low:
+            return low[n.lower()]
+    return None
 
 def normalize_identifier(value: object) -> Optional[str]:
     if value is None:
@@ -477,14 +488,14 @@ def process_diarios(limit: Optional[int] = None) -> None:
 
         for row in rows:
             procesados += 1
-            diario_id = str(row.get("IDDiario") or "").strip()
-            descripcion = str(row.get("Descripcion") or "").strip()
-            observaciones = str(row.get("OBSERVACIONES") or "").strip()
-            cuenta = str(row.get("CUENTA") or "").strip()
-            minutos = to_float(row.get("MINUTOS")) or 0.0
-            fechainicio = normalize_datetime(row.get("FECHAINICIO"))
-            prioridad = normalize_priority(row.get("PRIORIDAD"))
-            tecnico_raw = normalize_identifier(row.get("IdTecnico"))
+            diario_id   = str(get_any(row, "IDDiario", "IdDiario") or "").strip()
+            descripcion = str(get_any(row, "Descripcion", "DESCRIPCION") or "").strip()
+            observaciones = str(get_any(row, "OBSERVACIONES", "Observaciones") or "").strip()
+            cuenta      = str(get_any(row, "CUENTA", "Cuenta") or "").strip()
+            minutos     = to_float(get_any(row, "MINUTOS", "Minutos")) or 0.0
+            fechainicio = normalize_datetime(get_any(row, "FECHAINICIO", "FechaInicio"))
+            prioridad   = normalize_priority(get_any(row, "PRIORIDAD", "Prioridad"))
+            tecnico_raw = normalize_identifier(get_any(row, "IDTecnico", "IdTecnico", "IDTECNICO"))
 
             if not diario_id:
                 logger.warning(
