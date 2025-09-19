@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
+"""Extrae estadísticas de canales de WhatsApp en Odoo y las exporta a Excel.
+
+Obtiene conversaciones desde Discuss/mail.channel, calcula KPIs por cliente y
+operador, arma tablas y gráficos y genera un archivo listo para compartir.
+"""
+
 import os, sys, argparse, datetime as dt, re, xmlrpc.client
+
+import math  # <---- si no estaba
 import pandas as pd
 from dotenv import load_dotenv
 from html import unescape
-import math  # <---- si no estaba
 
 # ================== Config ==================
 N_TOP_OPERADORES = 8      # para gráfico por operador/día (series)

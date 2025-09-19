@@ -1,5 +1,9 @@
+"""Carga configuraciones de conexión a Odoo desde variables de entorno."""
+
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Configuration for connecting to Odoo

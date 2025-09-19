@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
+"""Sincroniza clientes y proveedores desde Alfa Gestión hacia Odoo.
 
-import pyodbc
-import xmlrpc.client
-import pandas as pd
+Lee datos maestros en SQL Server, aplica mapeos y crea o actualiza partners en
+Odoo mediante XML-RPC, incluyendo listas de precios configuradas.
+"""
+
 import os
 
+import pandas as pd
+import pyodbc
+import xmlrpc.client
 
-from odoo_config import url, db, username, password
+
+from odoo_config import db, password, url, username
 from sqlserver_config import sql_server
 
 # Conexión a Odoo

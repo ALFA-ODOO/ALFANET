@@ -1,8 +1,15 @@
-import xmlrpc.client
-import pyodbc
+"""Sincroniza movimientos de stock diarios desde Alfa Gestión hacia Odoo.
+
+Consulta SQL Server, consolida saldos, genera movimientos en Odoo mediante
+XML-RPC y deja trazas detalladas para auditoría.
+"""
+
 import logging
 import time
-from datetime import datetime # Necesario para la fecha actual
+from datetime import datetime  # Necesario para la fecha actual
+
+import pyodbc
+import xmlrpc.client
 
 # --- 1. Configuración de Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
