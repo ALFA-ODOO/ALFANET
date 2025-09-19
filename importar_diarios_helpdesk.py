@@ -38,6 +38,18 @@ from sqlserver_config import sql_server
 # Campo personalizado en helpdesk.ticket para almacenar el ID del diario.
 CUSTOM_FIELD_NAME = os.getenv("ODOO_TICKET_DIARY_FIELD", "x_studio_iddiario")
 
+SOLVED_STAGE_PREFERRED_NAME = os.getenv("ODOO_HELPDESK_SOLVED_STAGE_NAME", "Resuelto")
+SOLVED_STAGE_FALLBACKS = ["Resuelto", "Resuelta", "Solved", "Cerrado", "Done"]
+
+# === Etapa objetivo en Helpdesk ===
+HELPDESK_TEAM_ID = int(os.getenv("ODOO_HELPDESK_TEAM_ID", "1"))
+
+# Nombre de la etapa que querés usar
+STAGE_PREFERRED_NAME = os.getenv("ODOO_HELPDESK_STAGE_NAME", "Conexion Remota")
+# Alternativas (acentos y variantes) por si el nombre no coincide exactamente
+STAGE_FALLBACKS = ["Conexión Remota", "Conexion remota", "Conexión remota", "Remote connection", "Remoto"]
+
+
 # Directorio y formato de logs.
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -123,6 +135,38 @@ def get_odoo_clients() -> Tuple[int, xmlrpc.client.ServerProxy]:
 # ----------------------------------------------------------------------------
 # Funciones auxiliares
 # ----------------------------------------------------------------------------
+def is_user_in_team(models, uid, team_id: int, user_id: int) -> bool:
+    data = models.execute_kw(db, uid, password, "helpdesk.team", "read", [[team_id], ["member_ids"]])
+    members = set(data[0].get("member_ids", [])) if data else set()
+    return user_id in members
+
+def get_stage_id_by_name(models, uid, team_id: int) -> Optional[int]:
+    """Devuelve el ID de la etapa deseada (STAGE_PREFERRED_NAME) para el equipo dado, con fallbacks."""
+    names_to_try = [STAGE_PREFERRED_NAME] + [
+        n for n in STAGE_FALLBACKS if n.lower() != STAGE_PREFERRED_NAME.lower()
+    ]
+
+    for name in names_to_try:
+        # Buscar primero etapa asociada al equipo
+        stage_ids = models.execute_kw(
+            db, uid, password, "helpdesk.stage", "search",
+            [[["name", "ilike", name], ["team_ids", "in", [team_id]]]],
+            {"limit": 1},
+        )
+        if stage_ids:
+            return stage_ids[0]
+
+        # Luego buscar etapa "global" (sin equipo)
+        stage_ids = models.execute_kw(
+            db, uid, password, "helpdesk.stage", "search",
+            [[["name", "ilike", name]]],
+            {"limit": 1},
+        )
+        if stage_ids:
+            return stage_ids[0]
+
+    return None
+
 
 
 def ensure_custom_field_exists(
@@ -332,50 +376,107 @@ def ticket_exists(
     )
     return bool(existing)
 
+# Cache simple para no leer/escribir el equipo en cada fila
+TEAM_MEMBERS_CACHE: dict[int, set[int]] = {}
+
+def ensure_user_in_team(models, uid, team_id: int, user_id: int) -> None:
+    """Asegura que user_id sea miembro del equipo Helpdesk (M2M member_ids)."""
+    members = TEAM_MEMBERS_CACHE.get(team_id)
+    if members is None:
+        data = models.execute_kw(
+            db, uid, password, "helpdesk.team", "read", [[team_id], ["member_ids"]]
+        )
+        members = set(data[0].get("member_ids", [])) if data else set()
+        TEAM_MEMBERS_CACHE[team_id] = members
+
+    if user_id not in members:
+        models.execute_kw(
+            db, uid, password, "helpdesk.team", "write",
+            [[team_id], {"member_ids": [(4, user_id)]}]  # (4, id) = add to M2M
+        )
+        members.add(user_id)
+        logger.info("Agregado user_id %s como miembro del equipo %s", user_id, team_id)
+
+
 
 def create_ticket(
     models: xmlrpc.client.ServerProxy,
     uid: int,
     *,
-    name: str,
-    description: str,
     diario_id: str,
     partner_id: int,
     user_id: int,
     fechainicio: Optional[dt.datetime],
     prioridad: Optional[str],
+    team_id: int,
+    stage_id: Optional[int],
+    descripcion: str,
+    observaciones: str,
+    matricula: str,
 ) -> Optional[int]:
-    """Crear un ticket en Odoo y devolver su ID."""
+    # name = "CONEXION <MATRICULA> / <FECHAINICIO> / <IDDIARIO>"
+    fechainicio_txt = fechainicio.strftime("%Y-%m-%d %H:%M") if fechainicio else ""
+    name = f"CONEXION {matricula.strip()} / {fechainicio_txt} / {diario_id}".strip()
 
-    vals = {
+    # 1) CREATE (sin stage_id para evitar triggers de auto-asignación durante el create)
+    vals_create = {
         "name": name,
-        "description": description or "",
-        "team_id": 1,
+        "description": observaciones or "",
+        "team_id": team_id,
         "partner_id": partner_id,
-        "user_id": user_id,
         CUSTOM_FIELD_NAME: diario_id,
     }
     if prioridad:
-        vals["priority"] = prioridad
+        vals_create["priority"] = prioridad
+
     try:
         ticket_id = models.execute_kw(
-            db, uid, password, "helpdesk.ticket", "create", [vals]
+            db, uid, password, "helpdesk.ticket", "create", [vals_create],
+            {"context": {"mail_create_nosubscribe": True, "tracking_disable": True}},
         )
         logger.info("Ticket creado (ID: %s) para diario %s", ticket_id, diario_id)
+
+        # 2) WRITE de stage_id (si corresponde)
+        if stage_id:
+            models.execute_kw(
+                db, uid, password, "helpdesk.ticket", "write",
+                [[ticket_id], {"stage_id": stage_id}],
+                {"context": {"tracking_disable": True}},
+            )
+
+        # 3) WRITE de user_id (AL FINAL) + verificación y reintento si algún trigger lo pisa
+        def _write_user(u_id: int) -> None:
+            models.execute_kw(
+                db, uid, password, "helpdesk.ticket", "write",
+                [[ticket_id], {"user_id": u_id}],
+                {"context": {"mail_create_nosubscribe": True, "tracking_disable": True}},
+            )
+
+        _write_user(user_id)
+
+        # Verificar y reintentar 1 vez si no quedó el user correcto
+        assigned = models.execute_kw(
+            db, uid, password, "helpdesk.ticket", "read", [[ticket_id], ["user_id"]]
+        )[0].get("user_id")
+        assigned_id = assigned[0] if isinstance(assigned, (list, tuple)) and assigned else assigned
+        if assigned_id != user_id:
+            logger.warning(
+                "Auto-asignación cambió el ticket %s a user_id=%s; reescribiendo a %s.",
+                ticket_id, assigned_id, user_id
+            )
+            _write_user(user_id)
+
         if fechainicio:
             update_ticket_dates(models, uid, ticket_id, fechainicio)
+
         return ticket_id
     except xmlrpc.client.Fault as exc:
-        logger.error(
-            "Error al crear ticket para diario %s: %s", diario_id, exc
-        )
-    except Exception as exc:  # pragma: no cover - seguridad
-        logger.exception(
-            "Excepción inesperada al crear ticket para diario %s: %s",
-            diario_id,
-            exc,
-        )
+        logger.error("Error al crear ticket para diario %s: %s", diario_id, exc)
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Excepción inesperada al crear ticket para diario %s: %s", diario_id, exc)
     return None
+
+
 
 
 def update_ticket_dates(
@@ -420,6 +521,7 @@ def create_timesheet_line(
     minutos: float,
     fecha: dt.date,
     user_id: int,
+    matricula: str,   # ⬅️ nuevo parámetro
 ) -> None:
     """Crear una ``account.analytic.line`` asociada al ticket."""
 
@@ -428,8 +530,9 @@ def create_timesheet_line(
 
     unit_amount = round(minutos / 60.0, 2)
     descripcion = descripcion or "Sin descripción"
+    fechainicio_txt = fecha.strftime("%Y-%m-%d %H:%M") if fecha else ""
     vals = {
-        "name": f"Diario {diario_id} - {descripcion[:60]}",
+        "name":  f"CONEXION {matricula.strip()} / {fechainicio_txt} / {diario_id}".strip(),   #f"Diario {diario_id} - {descripcion[:60]}",
         "unit_amount": unit_amount,
         "date": fecha.isoformat(),
         "user_id": user_id,
@@ -466,122 +569,112 @@ def create_timesheet_line(
 # Flujo principal
 # ----------------------------------------------------------------------------
 
-
-def process_diarios(limit: Optional[int] = None) -> None:
+def process_diarios(limit: Optional[int] = None, target_date: Optional[dt.date] = None) -> None:
     if not TECHNICIAN_USER_MAP:
-        logger.error(
-            "El mapeo TECHNICIAN_USER_MAP está vacío. Complete los pares IdTecnico -> user_id antes de continuar."
-        )
+        logger.error("El mapeo TECHNICIAN_USER_MAP está vacío. Complete IdTecnico -> user_id.")
         return
 
     uid, models = get_odoo_clients()
     ensure_custom_field_exists(models, uid)
     ticket_timesheet_field = get_timesheet_ticket_field(models, uid)
 
+    # Etapa: "Conexion Remota"
+    target_stage_id = get_stage_id_by_name(models, uid, HELPDESK_TEAM_ID)
+    if not target_stage_id:
+        logger.warning("No se encontró la etapa '%s'. Se usará la etapa por defecto de Odoo.", STAGE_PREFERRED_NAME)
+
     connection = get_sql_connection()
     cursor = connection.cursor()
     try:
-        rows = fetch_diarios(cursor, limit=limit)
-        procesados = 0
-        creados = 0
-        descartados = 0
+        rows = fetch_diarios(cursor, limit=limit, target_date=target_date)
+        procesados = creados = descartados = 0
 
         for row in rows:
             procesados += 1
-            diario_id   = str(get_any(row, "IDDiario", "IdDiario") or "").strip()
-            descripcion = str(get_any(row, "Descripcion", "DESCRIPCION") or "").strip()
-            observaciones = str(get_any(row, "OBSERVACIONES", "Observaciones") or "").strip()
-            cuenta      = str(get_any(row, "CUENTA", "Cuenta") or "").strip()
-            minutos     = to_float(get_any(row, "MINUTOS", "Minutos")) or 0.0
-            fechainicio = normalize_datetime(get_any(row, "FECHAINICIO", "FechaInicio"))
-            prioridad   = normalize_priority(get_any(row, "PRIORIDAD", "Prioridad"))
-            tecnico_raw = normalize_identifier(get_any(row, "IDTecnico", "IdTecnico", "IDTECNICO"))
+
+            # Lecturas robustas (case-insensitive)
+            diario_id    = str(get_any(row, "IDDiario", "IdDiario") or "").strip()
+            descripcion  = str(get_any(row, "Descripcion", "DESCRIPCION") or "").strip()
+            observaciones= str(get_any(row, "OBSERVACIONES", "Observaciones") or "").strip()
+            cuenta       = str(get_any(row, "CUENTA", "Cuenta") or "").strip()
+            minutos      = to_float(get_any(row, "MINUTOS", "Minutos")) or 0.0
+            fechainicio  = normalize_datetime(get_any(row, "FECHAINICIO", "FechaInicio"))
+            prioridad    = normalize_priority(get_any(row, "PRIORIDAD", "Prioridad"))
+            matricula    = str(get_any(row, "MATRICULA", "Matricula") or "").strip()   # ⬅️ nuevo
+
+            tecnico_raw = normalize_identifier(
+                get_any(row, "IDTecnico", "IdTecnico", "IDTECNICO", "IDTecnico2", "IdTecnico2", "IDTECNICO2")
+            )
 
             if not diario_id:
-                logger.warning(
-                    "Registro sin IDDiario descartado: %s", row
-                )
+                logger.info("Registro descartado sin IDDiario: %s", row)
                 descartados += 1
                 continue
 
             if not tecnico_raw or tecnico_raw not in TECHNICIAN_USER_MAP:
-                logger.info(
-                    "Diario %s descartado: IdTecnico %s sin mapeo.",
-                    diario_id,
-                    tecnico_raw,
-                )
+                logger.info("Diario %s descartado: IdTecnico %s sin mapeo.", diario_id, tecnico_raw)
                 descartados += 1
                 continue
 
             user_id = TECHNICIAN_USER_MAP[tecnico_raw]
 
+            ensure_user_in_team(models, uid, HELPDESK_TEAM_ID, user_id)
+
             partner_id = find_partner_id(models, uid, cuenta)
             if not partner_id:
-                logger.info(
-                    "Diario %s descartado: sin partner con ref %s.",
-                    diario_id,
-                    cuenta,
-                )
+                logger.info("Diario %s descartado: sin partner con ref %s.", diario_id, cuenta)
                 descartados += 1
                 continue
 
             if ticket_exists(models, uid, diario_id):
-                logger.info(
-                    "Diario %s omitido: ticket ya existe en Odoo.", diario_id
-                )
+                logger.info("Diario %s omitido: ticket ya existe.", diario_id)
                 continue
 
             ticket_id = create_ticket(
                 models,
                 uid,
-                name=descripcion or f"Diario {diario_id}",
-                description=observaciones,
                 diario_id=diario_id,
                 partner_id=partner_id,
-                user_id=user_id,
+                user_id=user_id,                 # mismo que la timesheet
                 fechainicio=fechainicio,
                 prioridad=prioridad,
+                team_id=HELPDESK_TEAM_ID,
+                stage_id=target_stage_id,
+                descripcion=descripcion,
+                observaciones=observaciones,
+                matricula=matricula,             # ⬅️ pasa MATRICULA para armar el name
             )
+
             if ticket_id:
                 creados += 1
+                # Timesheet vinculada
                 if ticket_timesheet_field and minutos > 0 and fechainicio:
                     try:
                         create_timesheet_line(
-                            models,
-                            uid,
-                            ticket_id,
-                            ticket_timesheet_field,
+                            models, uid, ticket_id, ticket_timesheet_field,
                             diario_id=diario_id,
                             descripcion=descripcion,
                             minutos=minutos,
                             fecha=fechainicio.date(),
+                            matricula=matricula,             # ⬅️ pasa MATRICULA para armar el name
                             user_id=user_id,
                         )
                     except Exception as exc:  # pragma: no cover
-                        logger.exception(
-                            "Excepción inesperada al crear timesheet para diario %s: %s",
-                            diario_id,
-                            exc,
-                        )
+                        logger.exception("Excepción al crear timesheet para diario %s: %s", diario_id, exc)
             else:
                 descartados += 1
 
-        logger.info(
-            "Proceso finalizado. Procesados: %s, Creados: %s, Descartados: %s",
-            procesados,
-            creados,
-            descartados,
-        )
+        logger.info("Proceso finalizado. Procesados: %s, Creados: %s, Descartados: %s", procesados, creados, descartados)
         logger.info("Log detallado: %s", LOG_FILE)
     finally:
         cursor.close()
         connection.close()
 
 
+
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
-
 
 def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -593,16 +686,28 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         default=None,
         help="Cantidad máxima de registros a procesar (para pruebas).",
     )
+    parser.add_argument(
+        "--fecha",
+        type=str,
+        default=None,
+        help="Fecha a procesar en formato YYYY-MM-DD (si se omite, toma hoy).",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
     args = parse_args(argv)
+
+    target_date = None
+    if args.fecha:
+        target_date = dt.datetime.strptime(args.fecha, "%Y-%m-%d").date()
+
     try:
-        process_diarios(limit=args.limit)
+        process_diarios(limit=args.limit, target_date=target_date)
     except Exception as exc:
         logger.exception("Fallo inesperado en la importación: %s", exc)
         logger.info("Revise el archivo de log para más detalles: %s", LOG_FILE)
+
 
 
 if __name__ == "__main__":
