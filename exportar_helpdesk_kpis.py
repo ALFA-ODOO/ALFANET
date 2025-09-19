@@ -1,5 +1,13 @@
 # -*- coding: utf-8 -*-
+"""Genera reportes de KPIs de Helpdesk en Excel a partir de datos de Odoo.
+
+Conecta vía XML-RPC, obtiene tickets, partes de horas y calcula métricas por
+cliente y operador en un rango de fechas configurable. El resultado se exporta
+a un archivo de Excel con hojas y estilos listos para análisis.
+"""
+
 import os, sys, argparse, datetime as dt, xmlrpc.client
+
 import pandas as pd
 from dotenv import load_dotenv
 

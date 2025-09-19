@@ -1,5 +1,13 @@
-import pyodbc
+"""Exporta contactos de Alfa Gestión a un archivo de texto formateado.
+
+El script consulta clientes en SQL Server y genera ``contactos.txt`` con
+entradas estilo ``"Nombre" <correo@example.com>`` para alimentar listas de
+difusión.
+"""
+
 import os
+
+import pyodbc
 
 from sqlserver_config import sql_server
 

@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
+"""Carga o actualiza productos de Alfa Gestión en Odoo con soporte masivo.
+
+Lee catálogos desde SQL Server, sincroniza categorías, variantes e imágenes y
+utiliza múltiples hilos para acelerar la creación o actualización vía XML-RPC.
+"""
+
+import base64
+import datetime
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import pandas as pd
 import pyodbc
 import xmlrpc.client
-import base64
-import os
-import pandas as pd
-import datetime
-from concurrent.futures import ThreadPoolExecutor
-import threading
 
 from odoo_config import url, db, username, password
 from sqlserver_config import sql_server

@@ -1,5 +1,9 @@
+"""Define parámetros de conexión a SQL Server obtenidos del entorno."""
+
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # SQL Server connection settings
