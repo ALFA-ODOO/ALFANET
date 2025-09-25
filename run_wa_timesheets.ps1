@@ -68,4 +68,5 @@ $exportArgs = @(
 )
 
 Invoke-PythonScript -ScriptPath $script -Arguments $waArgs -LogPath $log -SupportsDryRun
-Invoke-PythonScript -ScriptPath $exportScript -Arguments $exportArgs -LogPath $log
+
+Invoke-PythonScript -ScriptPath $exportScript -LogPath $log
