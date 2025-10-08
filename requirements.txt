@@ -1,0 +1,8 @@
+pandas
+numpy
+openpyxl
+xlsxwriter
+xlrd
+requests
+python-dateutil
+pytz
